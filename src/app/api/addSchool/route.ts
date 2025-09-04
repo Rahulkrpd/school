@@ -1,21 +1,27 @@
 import dbConnect from "@/lib/db";
 import School from "@/model/school";
-import { uploadToCloudinary } from "@/utils/cloudinary";
+import { v2 as cloudinary, UploadApiResponse } from "cloudinary";
 import { NextResponse } from "next/server";
-import path from "path";
-import { writeFile } from "fs/promises";
+
+// Cloudinary config (make sure these env vars exist in Vercel)
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 export async function POST(req: Request) {
     await dbConnect();
 
     try {
         const formData = await req.formData();
+
         const nameEntry = formData.get("name");
         const addressEntry = formData.get("address");
         const cityEntry = formData.get("city");
         const stateEntry = formData.get("state");
         const contactEntry = formData.get("contact");
-        const emailEntry = (formData.get("email") ?? formData.get("email_id"));
+        const emailEntry = formData.get("email") ?? formData.get("email_id");
         const file = formData.get("image") as File | null;
 
         if (
@@ -29,18 +35,20 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "Invalid form data" }, { status: 400 });
         }
 
+        const name: string = nameEntry;
+        const address: string = addressEntry;
+        const city: string = cityEntry;
+        const state: string = stateEntry;
+        const email: string = emailEntry;
+        const contact: number = Number(contactEntry);
 
-
-        const name = nameEntry;
-        const address = addressEntry;
-        const city = cityEntry;
-        const state = stateEntry;
-        const email = emailEntry;
-        const contact = Number(contactEntry);
-
-        const exist = await School.findOne({ email })
+        // check duplicate
+        const exist = await School.findOne({ email });
         if (exist) {
-            return NextResponse.json({ message: "School is already present with this email" }, { status: 409 });
+            return NextResponse.json(
+                { message: "School is already present with this email" },
+                { status: 409 }
+            );
         }
 
         let publicId = "";
@@ -49,10 +57,19 @@ export async function POST(req: Request) {
         if (file) {
             const bytes = await file.arrayBuffer();
             const buffer = Buffer.from(bytes);
-            const tempFilePath = path.join(process.cwd(), "public/temp", file.name);
-            await writeFile(tempFilePath, buffer);
 
-            const uploadRes = await uploadToCloudinary(tempFilePath);
+            // Upload buffer directly to Cloudinary
+            const uploadRes = (await new Promise<UploadApiResponse>((resolve, reject) => {
+                const uploadStream = cloudinary.uploader.upload_stream(
+                    { folder: "schools" },
+                    (error, result) => {
+                        if (error) reject(error);
+                        else resolve(result as UploadApiResponse);
+                    }
+                );
+                uploadStream.end(buffer);
+            })) as UploadApiResponse;
+
             mediaUrl = uploadRes.secure_url;
             publicId = uploadRes.public_id;
         }
@@ -65,11 +82,10 @@ export async function POST(req: Request) {
             email,
             contact,
             image: mediaUrl,
-            publicId
-
+            publicId,
         });
 
-        return NextResponse.json({ message: "Post created", newSchool });
+        return NextResponse.json({ message: "School created", newSchool });
     } catch (error) {
         console.error(error);
         return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
